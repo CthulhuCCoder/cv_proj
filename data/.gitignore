@@ -1,0 +1,8 @@
+*.avi
+*.mkv
+*.mov
+*.zip
+*.7z
+!demo.mp4
+demo_ground_truth/
+!demo_ground_truth/*.png

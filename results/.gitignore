@@ -1,0 +1,10 @@
+*
+!.gitignore
+!benchmark.csv
+!demo_benchmark.md
+!benchmark.png
+!demo_diagnostic.mp4
+!demo_events.jsonl
+!demo_stats.csv
+!snapshots/
+snapshots/*

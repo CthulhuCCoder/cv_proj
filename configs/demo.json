@@ -1,0 +1,15 @@
+{
+  "method": "mog2",
+  "history": 200,
+  "learning_rate": 0.005,
+  "min_area": 100,
+  "warmup_frames": 30,
+  "morphology_kernel": 3,
+  "dilate_iterations": 0,
+  "roi_polygon": [[5, 20], [314, 20], [314, 234], [5, 234]],
+  "line": [[160, 35], [160, 225]],
+  "line_hysteresis": 4,
+  "tracker_max_distance": 40,
+  "tracker_min_hits": 3,
+  "cooldown_frames": 20
+}

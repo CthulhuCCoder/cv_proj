@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "motion-detector"
+version = "1.0.0"
+description = "CPU real-time motion detection for a static surveillance camera"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "opencv-python>=4.8"]
+
+[project.optional-dependencies]
+plots = ["matplotlib>=3.7"]
+
+[project.scripts]
+motion-detector = "motion_detector.main:main"
+motion-benchmark = "motion_detector.evaluation.run_benchmark:main"
+motion-benchmark-report = "motion_detector.scripts.summarize_benchmark:main"
+
+[tool.setuptools]
+packages = ["motion_detector", "motion_detector.detector", "motion_detector.evaluation", "motion_detector.scripts"]
+package-dir = {"motion_detector" = "."}
