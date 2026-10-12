@@ -7,7 +7,7 @@
 Требуются Python 3.10+, NumPy и OpenCV. Перейдите в каталог проекта:
 
 ```powershell
-cd outputs/motion_detector
+cd motion_detector
 python -m pip install -r requirements.txt
 python scripts/generate_demo.py
 python main.py --video data/demo.mp4 --config configs/demo.json --headless --output results/demo.mp4 --events results/events.jsonl --statistics results/statistics.csv
