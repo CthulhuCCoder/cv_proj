@@ -50,7 +50,7 @@ python main.py --video videos_mp4 --config configs/demo.json --headless `
 
 ## Сравнение и данные
 
-Сгенерировать тестовое видео (по умолчанию 240 кадров) и покадровые PNG-маски без скачиваний: `python outputs/motion_detector/scripts/generate_demo.py`. Запустить одинаковый production-конвейер для всех четырёх методов:
+Сгенерировать тестовое видео (по умолчанию 240 кадров) и покадровые PNG-маски без скачиваний: `python motion_detector/scripts/generate_demo.py`. Запустить одинаковый production-конвейер для всех четырёх методов:
 
 ```powershell
 python evaluation/run_benchmark.py --video data/demo.mp4 --config configs/demo.json --ground-truth-dir data/demo_ground_truth --event-times 4.08 --output results/benchmark.csv
