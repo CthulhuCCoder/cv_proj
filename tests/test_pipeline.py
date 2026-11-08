@@ -1,6 +1,7 @@
 """Dependency-free tests: python -m unittest discover -s tests -v"""
 
 import unittest
+import json
 import os
 from pathlib import Path
 from unittest.mock import patch
@@ -8,21 +9,22 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-from motion_detector.config import DetectorConfig
+from motion_detector.config import DetectorConfig, load_line_overrides
 from motion_detector.detector.alarm import AlarmLogic
 from motion_detector.detector.background import FrameDifferenceModel, RunningAverageModel, create_background_subtractor
-from motion_detector.detector.contours import find_objects
+from motion_detector.detector.contours import DetectedObject, find_objects
 from motion_detector.detector.line_crossing import LineCrossingCounter
 from motion_detector.detector.morphology import clean_mask
 from motion_detector.detector.pipeline import MotionPipeline
 from motion_detector.detector.preprocess import preprocess
 from motion_detector.detector.roi import apply_roi
-from motion_detector.detector.tracker import Track
+from motion_detector.detector.tracker import CentroidTracker, Track
 from motion_detector.evaluation.metrics import binary_metrics, event_metrics
 from motion_detector.main import run, run_batch
 from motion_detector.config import AppConfig
 from motion_detector.video_io import find_video_files
 from motion_detector.scripts.convert_videos import convert_video
+from motion_detector.scripts.line_editor import line_key, save_lines
 
 
 class PipelineTests(unittest.TestCase):
@@ -70,6 +72,26 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].direction, "pos_to_neg")
         self.assertAlmostEqual(events[0].x, 50)
+
+    def test_centroid_tracker_keeps_id_between_frames(self):
+        tracker = CentroidTracker(max_distance=10, max_missed=2)
+        contour = np.empty((0, 1, 2), np.int32)
+
+        def detection(x):
+            return DetectedObject(contour, (x - 2, 0, 4, 4), 16.0, (x, 2))
+
+        original_ids = {track.centroid: track.track_id for track in tracker.update([detection(2), detection(30)])}
+        # Detection order can change between frames; IDs must follow position.
+        moved = {track.centroid: track for track in tracker.update([detection(28), detection(4)])}
+        self.assertEqual(moved[(4, 2)].track_id, original_ids[(2, 2)])
+        self.assertEqual(moved[(28, 2)].track_id, original_ids[(30, 2)])
+        self.assertEqual(moved[(4, 2)].history, [(2, 2), (4, 2)])
+
+        tracker.update([])
+        recovered = {track.centroid: track for track in tracker.update([detection(8), detection(24)])}
+        self.assertEqual(recovered[(8, 2)].track_id, original_ids[(2, 2)])
+        self.assertEqual(recovered[(24, 2)].track_id, original_ids[(30, 2)])
+        self.assertEqual(recovered[(8, 2)].missed, 0)
 
     def test_all_background_models_share_factory_api(self):
         frame = np.zeros((20, 20), np.uint8)
@@ -182,6 +204,60 @@ class PipelineTests(unittest.TestCase):
             "video": str(base / "a_bad.avi"),
             "error": "IndexError: unexpected malformed frame",
         }])
+
+    def test_batch_mode_applies_line_override_per_video(self):
+        base = Path("work") / "motion_detector_batch_lines"
+        base.mkdir(parents=True, exist_ok=True)
+        for name in ("first.avi", "second.avi", "third.mp4"):
+            (base / name).touch()
+        (base / "nested").mkdir(exist_ok=True)
+        (base / "nested" / "first.avi").touch()
+        lines_path = base / "lines.json"
+        lines_path.write_text(json.dumps({
+            "default": [[5, 1], [5, 20]],
+            "first.avi": [[10, 1], [10, 20]],
+            "NESTED\\FIRST.AVI": [[15, 1], [15, 20]],
+            "second": None,
+        }), encoding="utf-8")
+        seen = {}
+        base_cfg = DetectorConfig(line=[(2, 1), (2, 20)])
+
+        def fake_run(app_cfg, detector_cfg, *, print_summary=True):
+            detector_cfg.validate()
+            seen[Path(app_cfg.video_path).relative_to(base).as_posix()] = detector_cfg.line
+            return {"frames": 1, "events": 0}
+
+        with patch("motion_detector.main.run", side_effect=fake_run):
+            result = run_batch(base, AppConfig(headless=True), base_cfg,
+                               line_overrides=load_line_overrides(lines_path))
+
+        self.assertEqual(result["videos_processed"], 4)
+        self.assertEqual(seen["first.avi"], [(10, 1), (10, 20)])
+        self.assertEqual(seen["nested/first.avi"], [(15, 1), (15, 20)])
+        self.assertEqual(seen["second.avi"], [])
+        self.assertEqual(seen["third.mp4"], [(5, 1), (5, 20)])
+        self.assertEqual(base_cfg.line, [(2, 1), (2, 20)])
+
+    def test_invalid_video_lines_fail_before_processing(self):
+        invalid_values = ([], [[1, 2]], [[1, 2], [1, 2]], [[-1, 0], [5, 5]],
+                          [[1.5, 2], [5, 5]], [[True, 2], [5, 5]], "1,2 5,5")
+        for value in invalid_values:
+            with self.subTest(value=value):
+                with patch.object(Path, "read_text", return_value=json.dumps({"clip": value})):
+                    with self.assertRaises(ValueError):
+                        load_line_overrides(Path("lines.json"))
+
+    def test_line_editor_uses_relative_keys_and_writes_json(self):
+        base = Path("work") / "motion_detector_line_editor"
+        base.mkdir(parents=True, exist_ok=True)
+        nested = base / "camera_a" / "clip.mp4"
+        nested.parent.mkdir(parents=True, exist_ok=True)
+        output = base / "video_lines.json"
+        lines = {line_key(nested, base): [[3, 4], [30, 40]], "other.mp4": None}
+        save_lines(output, lines)
+
+        self.assertEqual(line_key(nested, base), "camera_a/clip.mp4")
+        self.assertEqual(json.loads(output.read_text(encoding="utf-8")), lines)
 
     def test_avi_conversion_preserves_readable_frames(self):
         base = Path("work") / "motion_detector_convert_test"

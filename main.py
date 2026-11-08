@@ -16,7 +16,7 @@ if __package__ in (None, ""):
 
 import cv2
 
-from .config import AppConfig, DetectorConfig, METHODS
+from .config import AppConfig, DetectorConfig, METHODS, load_line_overrides
 from .detector.pipeline import MotionPipeline
 from .visualization import draw_overlay, make_diagnostic_view, save_snapshot
 from .video_io import find_video_files, resolve_source_path
@@ -30,6 +30,26 @@ def _parse_points(values: list[str] | None) -> list[tuple[int, int]]:
             raise ValueError(f"Point must use x,y notation: {value}")
         points.append((int(parts[0]), int(parts[1])))
     return points
+
+
+def _line_override_for_video(
+    video: Path,
+    directory: Path,
+    overrides: dict[str, list[tuple[int, int]] | None] | None,
+) -> tuple[bool, list[tuple[int, int]] | None]:
+    """Find the most specific line override for one batch item."""
+    if not overrides:
+        return False, None
+    try:
+        relative = video.relative_to(directory).as_posix()
+    except ValueError:
+        relative = video.name
+    candidates = (relative, video.name, video.stem, "default", "*")
+    for candidate in candidates:
+        key = candidate.replace("\\", "/").casefold()
+        if key in overrides:
+            return True, overrides[key]
+    return False, None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -46,6 +66,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--snapshot-every", type=int, default=0, help="save every N frames; 0 disables")
     parser.add_argument("--roi", nargs="+", help="ROI vertices: x,y x,y x,y ...")
     parser.add_argument("--line", nargs=2, help="finite stop-line endpoints: x1,y1 x2,y2")
+    parser.add_argument("--video-lines", type=Path,
+                        help="JSON mapping of video names/paths to line endpoints (null disables a line)")
     parser.add_argument("--direction", choices=("both", "neg_to_pos", "pos_to_neg"))
     parser.add_argument("--min-area", type=float)
     parser.add_argument("--min-consecutive", type=int, dest="min_consecutive_frames")
@@ -181,6 +203,7 @@ def run_batch(
     events_dir: Path | None = None,
     statistics_dir: Path | None = None,
     limit: int | None = None,
+    line_overrides: dict[str, list[tuple[int, int]] | None] | None = None,
 ) -> dict:
     """Process every supported video in ``directory`` and return an aggregate."""
     if limit is not None and limit < 1:
@@ -204,9 +227,17 @@ def run_batch(
             statistics_path=statistics_dir / f"{stem}.csv" if statistics_dir else None,
             snapshot_dir=app_cfg.snapshot_dir / stem if app_cfg.snapshot_every else app_cfg.snapshot_dir,
         )
+        has_line_override, line = _line_override_for_video(video, directory, line_overrides)
+        # ``null`` in the mapping means an explicit empty line, which disables
+        # crossing while keeping DetectorConfig's list-based contract.
+        per_video_detector = replace(detector_cfg, line=[] if line is None else line) if has_line_override else detector_cfg
         try:
-            summary = run(per_video, detector_cfg, print_summary=False)
-            summaries.append({"video": str(video), **summary})
+            summary = run(per_video, per_video_detector, print_summary=False)
+            summaries.append({
+                "video": str(video),
+                "line": [list(point) for point in per_video_detector.line] if per_video_detector.line else None,
+                **summary,
+            })
             print(f"[{index}/{len(files)}] Done: {summary['frames']} frames", flush=True)
         except Exception as exc:
             # A single malformed AVI must not stop a long dataset run. The
@@ -247,15 +278,18 @@ def main() -> None:
         if args.save_config:
             cfg.to_json(args.save_config)
         source = resolve_source_path(args.video)
+        line_overrides = load_line_overrides(args.video_lines) if args.video_lines else None
         if source.is_dir() and any((args.output, args.events, args.statistics)):
             raise ValueError("batch mode uses --output-dir, --events-dir and --statistics-dir")
         app = AppConfig(str(source), args.output, args.events, args.statistics, args.snapshot_dir,
                         args.snapshot_every, args.headless, args.max_frames, args.output_view, args.playback)
         if source.is_dir():
             run_batch(source, app, cfg, output_dir=args.output_dir, events_dir=args.events_dir,
-                      statistics_dir=args.statistics_dir, limit=args.limit_videos)
+                      statistics_dir=args.statistics_dir, limit=args.limit_videos,
+                      line_overrides=line_overrides)
         else:
-            run(app, cfg)
+            has_line_override, line = _line_override_for_video(source, source.parent, line_overrides)
+            run(app, replace(cfg, line=[] if line is None else line) if has_line_override else cfg)
     except (ValueError, OSError, RuntimeError, cv2.error) as exc:
         parser.exit(2, f"Error: {exc}\n")
 

@@ -10,6 +10,40 @@ Method = Literal["mog2", "knn", "diff", "running_average"]
 METHODS = ("mog2", "knn", "diff", "running_average")
 
 
+def load_line_overrides(path: Path) -> dict[str, list[tuple[int, int]] | None]:
+    """Load per-video stop lines from a JSON mapping.
+
+    Keys are normalized so both Windows and POSIX separators work. A value of
+    ``null`` explicitly disables line crossing for that video.
+    """
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    if not isinstance(data, dict):
+        raise ValueError("video lines configuration must be a JSON object")
+
+    overrides: dict[str, list[tuple[int, int]] | None] = {}
+    for raw_key, raw_line in data.items():
+        if not isinstance(raw_key, str) or not raw_key.strip():
+            raise ValueError("video lines keys must be non-empty strings")
+        key = raw_key.replace("\\", "/").casefold()
+        if key in overrides:
+            raise ValueError(f"duplicate video lines key: {raw_key}")
+        if raw_line is None:
+            overrides[key] = None
+            continue
+        if not isinstance(raw_line, (list, tuple)) or len(raw_line) != 2:
+            raise ValueError(f"line for {raw_key!r} must contain two [x, y] points or null")
+        points: list[tuple[int, int]] = []
+        for point in raw_line:
+            if (not isinstance(point, (list, tuple)) or len(point) != 2
+                    or any(type(value) is not int or value < 0 for value in point)):
+                raise ValueError(f"line coordinates for {raw_key!r} must be non-negative integers")
+            points.append((point[0], point[1]))
+        if points[0] == points[1]:
+            raise ValueError(f"line endpoints for {raw_key!r} must be different")
+        overrides[key] = points
+    return overrides
+
+
 @dataclass
 class DetectorConfig:
     """All algorithm parameters; coordinates refer to the source resolution."""
